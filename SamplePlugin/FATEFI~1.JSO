@@ -1,0 +1,13 @@
+{
+  "Author": "Dimascus",
+  "Name": "FATE Finder",
+  "Description": "Automatically farms FATEs for Bicolor Gemstones. Requires vnavmesh and Rotation Solver Reborn.",
+  "InternalName": "FateFinder",
+  "AssemblyVersion": "1.0.0.0",
+  "RepoUrl": "https://github.com/Dimascus/FATE-Finder",
+  "ApplicableVersion": "any",
+  "DalamudApiLevel": 12,
+  "LoadRequiredState": 0,
+  "LoadSync": false,
+  "Tags": ["fate", "farming", "automation", "bicolor", "gemstone"]
+}
