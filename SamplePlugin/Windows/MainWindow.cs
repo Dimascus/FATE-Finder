@@ -1,122 +1,243 @@
-﻿using System;
-using System.Numerics;
+// File location in project: Windows/MainWindow.cs
+
 using Dalamud.Bindings.ImGui;
-using Dalamud.Interface.Textures;
 using Dalamud.Interface.Utility;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
-using Lumina.Excel.Sheets;
+using FateFinder.Data;
+using FateFinder.Services;
+using System;
+using System.Numerics;
 
-namespace SamplePlugin.Windows;
+namespace FateFinder.Windows;
 
-public class MainWindow : Window, IDisposable
+public sealed class MainWindow : Window, IDisposable
 {
-    private readonly string goatImagePath;
-    private readonly Plugin plugin;
+    private readonly Plugin _plugin;
 
-    // We give this window a hidden ID using ##.
-    // The user will see "My Amazing Window" as window title,
-    // but for ImGui the ID is "My Amazing Window##With a hidden ID"
-    public MainWindow(Plugin plugin, string goatImagePath)
-        : base("My Amazing Window##With a hidden ID", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
+    // Keep a local reference so we don't call the property repeatedly
+    private Configuration   Config  => _plugin.Configuration;
+    private FateManager     Manager => _plugin.FateManager;
+
+    public MainWindow(Plugin plugin)
+        : base("FATE Finder##MainWindow", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
     {
+        _plugin = plugin;
         SizeConstraints = new WindowSizeConstraints
         {
-            MinimumSize = new Vector2(375, 330),
-            MaximumSize = new Vector2(float.MaxValue, float.MaxValue)
+            MinimumSize = new Vector2(420, 320),
+            MaximumSize = new Vector2(700, 800),
         };
-
-        this.goatImagePath = goatImagePath;
-        this.plugin = plugin;
     }
 
     public void Dispose() { }
 
     public override void Draw()
     {
-        ImGui.Text($"The random config bool is {plugin.Configuration.SomePropertyToBeSavedAndWithADefault}");
+        DrawStatusBar();
+        ImGui.Separator();
+        DrawZoneSelector();
+        ImGui.Separator();
+        DrawControls();
+        ImGui.Separator();
+        DrawOptions();
+        ImGui.Separator();
+        DrawPluginStatus();
+    }
 
-        if (ImGui.Button("Show Settings"))
+    // ── Status bar ────────────────────────────────────────────────────────────
+
+    private void DrawStatusBar()
+    {
+        var state = Manager.State;
+        var colour = state switch
         {
-            plugin.ToggleConfigUi();
+            FateFinderState.Stopped        => new Vector4(0.6f, 0.6f, 0.6f, 1f),  // grey
+            FateFinderState.Idle           => new Vector4(1.0f, 0.8f, 0.2f, 1f),  // yellow
+            FateFinderState.MovingToFate   => new Vector4(0.3f, 0.7f, 1.0f, 1f),  // blue
+            FateFinderState.InFate         => new Vector4(0.2f, 1.0f, 0.4f, 1f),  // green
+            FateFinderState.FateComplete   => new Vector4(0.6f, 1.0f, 0.6f, 1f),  // light green
+            FateFinderState.Teleporting    => new Vector4(0.9f, 0.5f, 1.0f, 1f),  // purple
+            FateFinderState.MovingToCenter => new Vector4(0.3f, 0.7f, 1.0f, 1f),  // blue
+            _                              => new Vector4(1f,   1f,   1f,   1f),
+        };
+
+        using (ImRaii.PushColor(ImGuiCol.Text, colour))
+            ImGui.Text($"● {state}");
+
+        ImGui.SameLine();
+        ImGui.TextDisabled("—");
+        ImGui.SameLine();
+        ImGui.TextWrapped(Manager.StatusMessage);
+
+        // FATE progress bar when in FATE
+        if (state is FateFinderState.InFate or FateFinderState.MovingToFate && Manager.CurrentFateProgress > 0)
+        {
+            ImGui.Spacing();
+            float progress = Manager.CurrentFateProgress / 100f;
+            ImGui.ProgressBar(progress, new Vector2(-1, 0), $"{Manager.CurrentFateName}  {Manager.CurrentFateProgress}%");
         }
+    }
 
-        ImGui.Spacing();
+    // ── Zone selector ─────────────────────────────────────────────────────────
 
-        // Normally a BeginChild() would have to be followed by an unconditional EndChild(),
-        // ImRaii takes care of this after the scope ends.
-        // This works for all ImGui functions that require specific handling, examples are BeginTable() or Indent().
-        using (var child = ImRaii.Child("SomeChildWithAScrollbar", Vector2.Zero, true))
+    private void DrawZoneSelector()
+    {
+        ImGui.Text("Zone to farm:");
+        ImGui.SetNextItemWidth(-1);
+
+        var selectedZone = ZoneData.GetByTerritoryId(Config.SelectedZoneId);
+        var previewLabel = selectedZone?.Name ?? "— Select a zone —";
+
+        using var combo = ImRaii.Combo("##ZoneCombo", previewLabel);
+        if (!combo.Success) return;
+
+        string? lastExpansion = null;
+        foreach (var zone in ZoneData.BicolorZones)
         {
-            // Check if this child is drawing
-            if (child.Success)
+            // Expansion header
+            if (zone.Expansion != lastExpansion)
             {
-                ImGui.Text("Have a goat:");
-                var goatImage = Plugin.TextureProvider.GetFromFile(goatImagePath).GetWrapOrDefault();
-                if (goatImage != null)
-                {
-                    using (ImRaii.PushIndent(55f))
-                    {
-                        ImGui.Image(goatImage.Handle, goatImage.Size);
-                    }
-                }
-                else
-                {
-                    ImGui.Text("Image not found.");
-                }
+                if (lastExpansion != null) ImGui.Separator();
+                using (ImRaii.PushColor(ImGuiCol.Text, new Vector4(1f, 0.8f, 0.3f, 1f)))
+                    ImGui.Text(zone.Expansion);
+                lastExpansion = zone.Expansion;
+            }
 
-                ImGuiHelpers.ScaledDummy(20.0f);
-
-                // Example for other services that Dalamud provides.
-                // PlayerState provides a wrapper filled with information about the player character.
-
-                var playerState = Plugin.PlayerState;
-                if (!playerState.IsLoaded)
+            bool isSelected = Config.SelectedZoneId == zone.TerritoryId;
+            using (ImRaii.PushIndent(12f))
+            {
+                if (ImGui.Selectable(zone.Name, isSelected))
                 {
-                    ImGui.Text("Our local player is currently not logged in.");
-                    return;
-                }
-                
-                if (!playerState.ClassJob.IsValid)
-                {
-                    ImGui.Text("Our current job is currently not valid.");
-                    return;
-                }
-                
-                ImGui.AlignTextToFramePadding();
-                ImGui.Text($"Current job:");
-                
-                // Scaling hardcoded pixel values is important, as otherwise users with HUD scales above or below 100%
-                // won't be able to see everything.
-                ImGui.SameLine(120 * ImGuiHelpers.GlobalScale);
-                
-                // Get the icon id from a known offset + the class jobs id
-                var jobIconId = 62100 + playerState.ClassJob.RowId;
-                var iconTexture = Plugin.TextureProvider.GetFromGameIcon(new GameIconLookup(jobIconId)).GetWrapOrEmpty();
-                ImGui.Image(iconTexture.Handle, new Vector2(28, 28) * ImGuiHelpers.GlobalScale);
-                
-                ImGui.SameLine();
-                
-                // If you want to see the Macro representation of this SeString use `.ToMacroString()`
-                // More info about SeStrings: https://dalamud.dev/plugin-development/sestring/
-                ImGui.Text(playerState.ClassJob.Value.Abbreviation.ToString());
-                
-                ImGui.SameLine();
-                ImGui.Text($" [Level {playerState.Level}]");
-                
-                // Example for querying Lumina, getting the name of our current area.
-                var territoryId = Plugin.ClientState.TerritoryType;
-                if (Plugin.DataManager.GetExcelSheet<TerritoryType>().TryGetRow(territoryId, out var territoryRow))
-                {
-                    ImGui.Text($"Current location:");
-                    ImGui.SameLine(120 * ImGuiHelpers.GlobalScale);
-                    ImGui.Text(territoryRow.PlaceName.Value.Name.ToString());
-                }
-                else
-                {
-                    ImGui.Text("Invalid territory.");
+                    Config.SelectedZoneId = zone.TerritoryId;
+                    Config.Save();
+                    // If running, stop so the new zone takes effect cleanly
+                    if (Manager.State != FateFinderState.Stopped)
+                        Manager.Stop();
                 }
             }
+
+            if (isSelected)
+                ImGui.SetItemDefaultFocus();
         }
+    }
+
+    // ── Start / Stop ──────────────────────────────────────────────────────────
+
+    private void DrawControls()
+    {
+        bool isRunning = Manager.State != FateFinderState.Stopped;
+
+        if (isRunning)
+        {
+            using (ImRaii.PushColor(ImGuiCol.Button,        new Vector4(0.7f, 0.1f, 0.1f, 1f)))
+            using (ImRaii.PushColor(ImGuiCol.ButtonHovered, new Vector4(0.9f, 0.2f, 0.2f, 1f)))
+            {
+                if (ImGui.Button("■  Stop", new Vector2(120, 0)))
+                    Manager.Stop();
+            }
+        }
+        else
+        {
+            bool canStart = Config.SelectedZoneId != 0 && _plugin.NavmeshIPC.IsAvailable;
+            using (ImRaii.Disabled(!canStart))
+            using (ImRaii.PushColor(ImGuiCol.Button,        new Vector4(0.1f, 0.6f, 0.1f, 1f)))
+            using (ImRaii.PushColor(ImGuiCol.ButtonHovered, new Vector4(0.2f, 0.8f, 0.2f, 1f)))
+            {
+                if (ImGui.Button("▶  Start", new Vector2(120, 0)))
+                    Manager.Start();
+            }
+
+            if (Config.SelectedZoneId == 0)
+            {
+                ImGui.SameLine();
+                ImGui.TextColored(new Vector4(1f, 0.5f, 0.2f, 1f), "← Select a zone first");
+            }
+            else if (!_plugin.NavmeshIPC.IsAvailable)
+            {
+                ImGui.SameLine();
+                ImGui.TextColored(new Vector4(1f, 0.3f, 0.3f, 1f), "vnavmesh not found!");
+            }
+        }
+    }
+
+    // ── Options ───────────────────────────────────────────────────────────────
+
+    private void DrawOptions()
+    {
+        ImGui.Text("Options");
+        ImGui.Spacing();
+
+        // Flight toggle
+        bool useFlight = Config.UseFlight;
+        if (ImGui.Checkbox("Use flight when navigating", ref useFlight))
+        {
+            Config.UseFlight = useFlight;
+            Config.Save();
+        }
+
+        // Level sync toggle
+        bool autoSync = Config.AutoLevelSync;
+        if (ImGui.Checkbox("Attempt auto level sync on FATE entry", ref autoSync))
+        {
+            Config.AutoLevelSync = autoSync;
+            Config.Save();
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Tries to trigger level sync via a GeneralAction.\nFor best results also enable Level Sync in your in-game FATE settings.");
+
+        ImGui.Spacing();
+        ImGui.Text("Idle behaviour (when no FATEs are active):");
+        ImGui.Spacing();
+
+        DrawIdleBehaviourCheckbox("Wait in place",                  IdleBehavior.WaitInPlace);
+        DrawIdleBehaviourCheckbox("Teleport to zone aetheryte",     IdleBehavior.TeleportToAetheryte,
+            "Requires the Teleporter plugin by Pohky.");
+        DrawIdleBehaviourCheckbox("Fly to zone centre",             IdleBehavior.MoveToZoneCenter);
+    }
+
+    private void DrawIdleBehaviourCheckbox(string label, IdleBehavior behaviour, string? tooltip = null)
+    {
+        bool isChecked = Config.IdleBehavior == behaviour;
+        if (ImGui.Checkbox(label, ref isChecked) && isChecked)
+        {
+            Config.IdleBehavior = behaviour;
+            Config.Save();
+        }
+        if (tooltip != null && ImGui.IsItemHovered())
+            ImGui.SetTooltip(tooltip);
+    }
+
+    // ── Plugin status ─────────────────────────────────────────────────────────
+
+    private void DrawPluginStatus()
+    {
+        ImGui.Text("Plugin Dependencies:");
+        ImGui.Spacing();
+
+        DrawDependencyStatus("vnavmesh",                _plugin.NavmeshIPC.IsAvailable);
+        DrawDependencyStatus("Rotation Solver Reborn",  _plugin.RotationSolverIPC.IsAvailable);
+
+        // Show navmesh build progress if building
+        if (_plugin.NavmeshIPC.IsAvailable && !_plugin.NavmeshIPC.IsReady)
+        {
+            float prog = _plugin.NavmeshIPC.BuildProgress;
+            if (prog >= 0)
+            {
+                ImGui.SameLine();
+                ImGui.TextDisabled($"(building navmesh {prog * 100:0}%)");
+            }
+        }
+    }
+
+    private static void DrawDependencyStatus(string name, bool available)
+    {
+        var (icon, colour) = available
+            ? ("✔", new Vector4(0.2f, 1f, 0.4f, 1f))
+            : ("✘", new Vector4(1f,   0.3f, 0.3f, 1f));
+
+        ImGui.TextColored(colour, icon);
+        ImGui.SameLine();
+        ImGui.Text(name);
     }
 }

@@ -1,59 +1,39 @@
-﻿using System;
-using System.Numerics;
+// File location in project: Windows/ConfigWindow.cs
+
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
+using System;
+using System.Numerics;
 
-namespace SamplePlugin.Windows;
+namespace FateFinder.Windows;
 
-public class ConfigWindow : Window, IDisposable
+public sealed class ConfigWindow : Window, IDisposable
 {
-    private readonly Configuration configuration;
+    private readonly Plugin _plugin;
+    private Configuration   Config => _plugin.Configuration;
 
-    // We give this window a constant ID using ###.
-    // This allows for labels to be dynamic, like "{FPS Counter}fps###XYZ counter window",
-    // and the window ID will always be "###XYZ counter window" for ImGui
-    public ConfigWindow(Plugin plugin) : base("A Wonderful Configuration Window###With a constant ID")
+    public ConfigWindow(Plugin plugin)
+        : base("FATE Finder — Settings##ConfigWindow",
+               ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoScrollbar)
     {
-        Flags = ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoScrollbar |
-                ImGuiWindowFlags.NoScrollWithMouse;
-
-        Size = new Vector2(232, 90);
-        SizeCondition = ImGuiCond.Always;
-
-        configuration = plugin.Configuration;
+        _plugin = plugin;
+        Size        = new Vector2(380, 200);
+        SizeCondition = Dalamud.Interface.Windowing.ImGuiCond.Always;
     }
 
     public void Dispose() { }
 
-    public override void PreDraw()
-    {
-        // Flags must be added or removed before Draw() is being called, or they won't apply
-        if (configuration.IsConfigWindowMovable)
-        {
-            Flags &= ~ImGuiWindowFlags.NoMove;
-        }
-        else
-        {
-            Flags |= ImGuiWindowFlags.NoMove;
-        }
-    }
-
     public override void Draw()
     {
-        // Can't ref a property, so use a local copy
-        var configValue = configuration.SomePropertyToBeSavedAndWithADefault;
-        if (ImGui.Checkbox("Random Config Bool", ref configValue))
-        {
-            configuration.SomePropertyToBeSavedAndWithADefault = configValue;
-            // Can save immediately on change if you don't want to provide a "Save and Close" button
-            configuration.Save();
-        }
+        ImGui.TextWrapped("All main settings are available on the main window (▶ Start / ■ Stop).");
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
 
-        var movable = configuration.IsConfigWindowMovable;
-        if (ImGui.Checkbox("Movable Config Window", ref movable))
-        {
-            configuration.IsConfigWindowMovable = movable;
-            configuration.Save();
-        }
+        ImGui.Text("FATE Finder v1.0");
+        ImGui.TextDisabled("By Dimascus — github.com/Dimascus/FATE-Finder");
+        ImGui.Spacing();
+        ImGui.TextColored(new Vector4(1f, 0.8f, 0.3f, 1f),
+            "Requires: vnavmesh + Rotation Solver Reborn");
     }
 }
